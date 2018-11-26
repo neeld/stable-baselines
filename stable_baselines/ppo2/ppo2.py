@@ -83,6 +83,7 @@ class PPO2(ActorCriticRLModel):
         self.n_batch = None
         self.summary = None
         self.episode_reward = None
+        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
@@ -94,6 +95,7 @@ class PPO2(ActorCriticRLModel):
                                                                "an instance of common.policies.ActorCriticPolicy."
 
             self.n_batch = self.n_envs * self.n_steps
+            self.num_timesteps = 0
 
             n_cpu = multiprocessing.cpu_count()
             if sys.platform == 'darwin':
@@ -245,12 +247,21 @@ class PPO2(ActorCriticRLModel):
 
         return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=1, tb_log_name="PPO2"):
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=1, tb_log_name="PPO2",
+              reset_num_timesteps=False):
         # Transform to callable if needed
         self.learning_rate = get_schedule_fn(self.learning_rate)
         self.cliprange = get_schedule_fn(self.cliprange)
 
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = False
+        if self.num_timesteps == 0:
+            new_tb_log = True
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             runner = Runner(env=self.env, model=self, n_steps=self.n_steps, gamma=self.gamma, lam=self.lam)
@@ -272,18 +283,21 @@ class PPO2(ActorCriticRLModel):
                 ep_info_buf.extend(ep_infos)
                 mb_loss_vals = []
                 if states is None:  # nonrecurrent version
+                    update_fac = self.n_batch // self.nminibatches // self.noptepochs + 1
                     inds = np.arange(self.n_batch)
                     for epoch_num in range(self.noptepochs):
                         np.random.shuffle(inds)
                         for start in range(0, self.n_batch, batch_size):
-                            timestep = ((update * self.noptepochs * self.n_batch + epoch_num * self.n_batch + start) //
-                                        batch_size)
+                            timestep = self.num_timesteps // update_fac + ((self.noptepochs * self.n_batch + epoch_num *
+                                                                            self.n_batch + start) // batch_size)
                             end = start + batch_size
                             mbinds = inds[start:end]
                             slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                             mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, writer=writer,
                                                                  update=timestep))
+                    self.num_timesteps += (self.n_batch * self.noptepochs) // batch_size * update_fac
                 else:  # recurrent version
+                    update_fac = self.n_batch // self.nminibatches // self.noptepochs // self.n_steps + 1
                     assert self.n_envs % self.nminibatches == 0
                     env_indices = np.arange(self.n_envs)
                     flat_indices = np.arange(self.n_envs * self.n_steps).reshape(self.n_envs, self.n_steps)
@@ -291,8 +305,8 @@ class PPO2(ActorCriticRLModel):
                     for epoch_num in range(self.noptepochs):
                         np.random.shuffle(env_indices)
                         for start in range(0, self.n_envs, envs_per_batch):
-                            timestep = ((update * self.noptepochs * self.n_envs + epoch_num * self.n_envs + start) //
-                                        envs_per_batch)
+                            timestep = self.num_timesteps // update_fac + ((self.noptepochs * self.n_envs + epoch_num *
+                                                                            self.n_envs + start) // envs_per_batch)
                             end = start + envs_per_batch
                             mb_env_inds = env_indices[start:end]
                             mb_flat_inds = flat_indices[mb_env_inds].ravel()
@@ -300,6 +314,7 @@ class PPO2(ActorCriticRLModel):
                             mb_states = states[mb_env_inds]
                             mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, update=timestep,
                                                                  writer=writer, states=mb_states))
+                    self.num_timesteps += (self.n_envs * self.noptepochs) // envs_per_batch * update_fac
 
                 loss_vals = np.mean(mb_loss_vals, axis=0)
                 t_now = time.time()
@@ -309,7 +324,7 @@ class PPO2(ActorCriticRLModel):
                     self.episode_reward = total_episode_reward_logger(self.episode_reward,
                                                                       true_reward.reshape((self.n_envs, self.n_steps)),
                                                                       masks.reshape((self.n_envs, self.n_steps)),
-                                                                      writer, update * (self.n_batch + 1))
+                                                                      writer, self.num_timesteps)
 
                 if callback is not None:
                     callback(locals(), globals())
@@ -318,7 +333,7 @@ class PPO2(ActorCriticRLModel):
                     explained_var = explained_variance(values, returns)
                     logger.logkv("serial_timesteps", update * self.n_steps)
                     logger.logkv("nupdates", update)
-                    logger.logkv("total_timesteps", update * self.n_batch)
+                    logger.logkv("total_timesteps", self.num_timesteps)
                     logger.logkv("fps", fps)
                     logger.logkv("explained_variance", float(explained_var))
                     logger.logkv('ep_rewmean', safe_mean([ep_info['r'] for ep_info in ep_info_buf]))

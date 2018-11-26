@@ -133,7 +133,8 @@ class BaseRLModel(ABC):
             set_global_seeds(seed)
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run",
+              reset_num_timesteps=False):
         """
         Return a trained model.
 
@@ -143,6 +144,7 @@ class BaseRLModel(ABC):
             It takes the local and global variables.
         :param log_interval: (int) The number of timesteps before logging.
         :param tb_log_name: (str) the name of the run for tensorboard log
+        :param reset_num_timesteps: (bool) whether or not to reset the current timestep number (used in logging)
         :return: (BaseRLModel) the trained model
         """
         pass
@@ -476,23 +478,27 @@ class SetVerbosity:
 
 
 class TensorboardWriter:
-    def __init__(self, graph, tensorboard_log_path, tb_log_name):
+    def __init__(self, graph, tensorboard_log_path, tb_log_name, new_tb_log=True):
         """
         Create a Tensorboard writer for a code segment, and saves it to the log directory as its own run
 
         :param graph: (Tensorflow Graph) the model graph
         :param tensorboard_log_path: (str) the save path for the log (can be None for no logging)
         :param tb_log_name: (str) the name of the run for tensorboard log
+        :param new_tb_log: (bool) whether or not to create a new logging folder for tensorbaord
         """
         self.graph = graph
         self.tensorboard_log_path = tensorboard_log_path
         self.tb_log_name = tb_log_name
         self.writer = None
+        self.new_tb_log = new_tb_log
 
     def __enter__(self):
         if self.tensorboard_log_path is not None:
-            save_path = os.path.join(self.tensorboard_log_path,
-                                     "{}_{}".format(self.tb_log_name, self._get_latest_run_id() + 1))
+            latest_run_id = self._get_latest_run_id()
+            if self.new_tb_log:
+                latest_run_id = latest_run_id + 1
+            save_path = os.path.join(self.tensorboard_log_path, "{}_{}".format(self.tb_log_name, latest_run_id))
             self.writer = tf.summary.FileWriter(save_path, graph=self.graph)
         return self.writer
 
