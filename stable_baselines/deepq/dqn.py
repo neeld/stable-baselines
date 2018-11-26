@@ -89,11 +89,14 @@ class DQN(OffPolicyRLModel):
         self.params = None
         self.summary = None
         self.episode_reward = None
+        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
 
     def setup_model(self):
+        self.num_timesteps = 0
+
         with SetVerbosity(self.verbose):
             assert not isinstance(self.action_space, gym.spaces.Box), \
                 "Error: DQN cannot output a gym.spaces.Box action space."
@@ -132,8 +135,18 @@ class DQN(OffPolicyRLModel):
 
                 self.summary = tf.summary.merge_all()
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="DQN"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="DQN",
+              reset_num_timesteps=False):
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = False
+        if self.num_timesteps == 0:
+            new_tb_log = True
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             # Create the replay buffer
@@ -157,13 +170,13 @@ class DQN(OffPolicyRLModel):
             reset = True
             self.episode_reward = np.zeros((1,))
 
-            for step in range(total_timesteps):
+            for _ in range(total_timesteps):
                 if callback is not None:
                     callback(locals(), globals())
                 # Take action and update exploration to the newest value
                 kwargs = {}
                 if not self.param_noise:
-                    update_eps = self.exploration.value(step)
+                    update_eps = self.exploration.value(self.num_timesteps)
                     update_param_noise_threshold = 0.
                 else:
                     update_eps = 0.
@@ -172,8 +185,8 @@ class DQN(OffPolicyRLModel):
                     # See Appendix C.1 in Parameter Space Noise for Exploration, Plappert et al., 2017
                     # for detailed explanation.
                     update_param_noise_threshold = \
-                        -np.log(1. - self.exploration.value(step) +
-                                self.exploration.value(step) / float(self.env.action_space.n))
+                        -np.log(1. - self.exploration.value(self.num_timesteps) +
+                                self.exploration.value(self.num_timesteps) / float(self.env.action_space.n))
                     kwargs['reset'] = reset
                     kwargs['update_param_noise_threshold'] = update_param_noise_threshold
                     kwargs['update_param_noise_scale'] = True
@@ -190,7 +203,7 @@ class DQN(OffPolicyRLModel):
                     ep_rew = np.array([rew]).reshape((1, -1))
                     ep_done = np.array([done]).reshape((1, -1))
                     self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_rew, ep_done, writer,
-                                                                      step)
+                                                                      self.num_timesteps)
 
                 episode_rewards[-1] += rew
                 if done:
@@ -199,10 +212,11 @@ class DQN(OffPolicyRLModel):
                     episode_rewards.append(0.0)
                     reset = True
 
-                if step > self.learning_starts and step % self.train_freq == 0:
+                if self.num_timesteps > self.learning_starts and self.num_timesteps % self.train_freq == 0:
                     # Minimize the error in Bellman's equation on a batch sampled from replay buffer.
                     if self.prioritized_replay:
-                        experience = self.replay_buffer.sample(self.batch_size, beta=self.beta_schedule.value(step))
+                        experience = self.replay_buffer.sample(self.batch_size,
+                                                               beta=self.beta_schedule.value(self.num_timesteps))
                         (obses_t, actions, rewards, obses_tp1, dones, weights, batch_idxes) = experience
                     else:
                         obses_t, actions, rewards, obses_tp1, dones = self.replay_buffer.sample(self.batch_size)
@@ -211,17 +225,17 @@ class DQN(OffPolicyRLModel):
                     if writer is not None:
                         # run loss backprop with summary, but once every 100 steps save the metadata
                         # (memory, compute time, ...)
-                        if (1 + step) % 100 == 0:
+                        if (1 + self.num_timesteps) % 100 == 0:
                             run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                             run_metadata = tf.RunMetadata()
                             summary, td_errors = self._train_step(obses_t, actions, rewards, obses_tp1, obses_tp1,
                                                                   dones, weights, sess=self.sess, options=run_options,
                                                                   run_metadata=run_metadata)
-                            writer.add_run_metadata(run_metadata, 'step%d' % step)
+                            writer.add_run_metadata(run_metadata, 'step%d' % self.num_timesteps)
                         else:
                             summary, td_errors = self._train_step(obses_t, actions, rewards, obses_tp1, obses_tp1,
                                                                   dones, weights, sess=self.sess)
-                        writer.add_summary(summary, step)
+                        writer.add_summary(summary, self.num_timesteps)
                     else:
                         _, td_errors = self._train_step(obses_t, actions, rewards, obses_tp1, obses_tp1, dones, weights,
                                                         sess=self.sess)
@@ -230,7 +244,8 @@ class DQN(OffPolicyRLModel):
                         new_priorities = np.abs(td_errors) + self.prioritized_replay_eps
                         self.replay_buffer.update_priorities(batch_idxes, new_priorities)
 
-                if step > self.learning_starts and step % self.target_network_update_freq == 0:
+                if self.num_timesteps > self.learning_starts and \
+                        self.num_timesteps % self.target_network_update_freq == 0:
                     # Update target network periodically.
                     self.update_target(sess=self.sess)
 
@@ -241,11 +256,14 @@ class DQN(OffPolicyRLModel):
 
                 num_episodes = len(episode_rewards)
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
-                    logger.record_tabular("steps", step)
+                    logger.record_tabular("steps", self.num_timesteps)
                     logger.record_tabular("episodes", num_episodes)
                     logger.record_tabular("mean 100 episode reward", mean_100ep_reward)
-                    logger.record_tabular("% time spent exploring", int(100 * self.exploration.value(step)))
+                    logger.record_tabular("% time spent exploring",
+                                          int(100 * self.exploration.value(self.num_timesteps)))
                     logger.dump_tabular()
+
+                self.num_timesteps += 1
 
         return self
 

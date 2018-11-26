@@ -91,6 +91,7 @@ class TRPO(ActorCriticRLModel):
         self.params = None
         self.summary = None
         self.episode_reward = None
+        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
@@ -98,6 +99,8 @@ class TRPO(ActorCriticRLModel):
     def setup_model(self):
         # prevent import loops
         from stable_baselines.gail.adversary import TransitionClassifier
+
+        self.num_timesteps = 0
 
         with SetVerbosity(self.verbose):
 
@@ -248,8 +251,18 @@ class TRPO(ActorCriticRLModel):
                     tf_util.function([observation, old_policy.obs_ph, action, atarg, ret],
                                      [self.summary, tf_util.flatgrad(optimgain, var_list)] + losses)
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="TRPO"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="TRPO",
+              reset_num_timesteps=False):
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = False
+        if self.num_timesteps == 0:
+            new_tb_log = True
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             with self.sess.as_default():
@@ -257,7 +270,6 @@ class TRPO(ActorCriticRLModel):
                                                  reward_giver=self.reward_giver, gail=self.using_gail)
 
                 episodes_so_far = 0
-                timesteps_so_far = 0
                 iters_so_far = 0
                 t_start = time.time()
                 lenbuffer = deque(maxlen=40)  # rolling buffer for episode lengths
@@ -280,7 +292,7 @@ class TRPO(ActorCriticRLModel):
                 while True:
                     if callback:
                         callback(locals(), globals())
-                    if total_timesteps and timesteps_so_far >= total_timesteps:
+                    if total_timesteps and self.num_timesteps >= total_timesteps:
                         break
 
                     logger.log("********** Iteration %i ************" % iters_so_far)
@@ -311,7 +323,7 @@ class TRPO(ActorCriticRLModel):
                                                                               seg["true_rew"].reshape(
                                                                                   (self.n_envs, -1)),
                                                                               seg["dones"].reshape((self.n_envs, -1)),
-                                                                              writer, timesteps_so_far)
+                                                                              writer, self.num_timesteps)
 
                         args = seg["ob"], seg["ob"], seg["ac"], atarg
                         fvpargs = [arr[::5] for arr in args]
@@ -319,7 +331,7 @@ class TRPO(ActorCriticRLModel):
                         self.assign_old_eq_new(sess=self.sess)
 
                         with self.timed("computegrad"):
-                            steps = timesteps_so_far + (k + 1) * (seg["total_timestep"] / self.g_step)
+                            steps = self.num_timesteps + (k + 1) * (seg["total_timestep"] / self.g_step)
                             run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                             run_metadata = tf.RunMetadata()
                             # run loss backprop with summary, and save the metadata (memory, compute time, ...)
@@ -427,11 +439,11 @@ class TRPO(ActorCriticRLModel):
                         logger.record_tabular("EpTrueRewMean", np.mean(true_rewbuffer))
                     logger.record_tabular("EpThisIter", len(lens))
                     episodes_so_far += len(lens)
-                    timesteps_so_far += seg["total_timestep"]
+                    self.num_timesteps += seg["total_timestep"]
                     iters_so_far += 1
 
                     logger.record_tabular("EpisodesSoFar", episodes_so_far)
-                    logger.record_tabular("TimestepsSoFar", timesteps_so_far)
+                    logger.record_tabular("TimestepsSoFar", self.num_timesteps)
                     logger.record_tabular("TimeElapsed", time.time() - t_start)
 
                     if self.verbose >= 1 and self.rank == 0:

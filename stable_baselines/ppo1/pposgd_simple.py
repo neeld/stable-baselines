@@ -72,12 +72,14 @@ class PPO1(ActorCriticRLModel):
         self.initial_state = None
         self.summary = None
         self.episode_reward = None
+        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
+            self.num_timesteps = 0
 
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -172,8 +174,18 @@ class PPO1(ActorCriticRLModel):
                 self.compute_losses = tf_util.function([obs_ph, old_pi.obs_ph, action_ph, atarg, ret, lrmult],
                                                        losses)
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="PPO1"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="PPO1",
+              reset_num_timesteps=False):
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = False
+        if self.num_timesteps == 0:
+            new_tb_log = True
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the PPO1 model must be " \
@@ -186,7 +198,6 @@ class PPO1(ActorCriticRLModel):
                 seg_gen = traj_segment_generator(self.policy_pi, self.env, self.timesteps_per_actorbatch)
 
                 episodes_so_far = 0
-                timesteps_so_far = 0
                 iters_so_far = 0
                 t_start = time.time()
 
@@ -200,13 +211,13 @@ class PPO1(ActorCriticRLModel):
                 while True:
                     if callback:
                         callback(locals(), globals())
-                    if total_timesteps and timesteps_so_far >= total_timesteps:
+                    if total_timesteps and self.num_timesteps >= total_timesteps:
                         break
 
                     if self.schedule == 'constant':
                         cur_lrmult = 1.0
                     elif self.schedule == 'linear':
-                        cur_lrmult = max(1.0 - float(timesteps_so_far) / total_timesteps, 0)
+                        cur_lrmult = max(1.0 - float(self.num_timesteps) / total_timesteps, 0)
                     else:
                         raise NotImplementedError
 
@@ -223,7 +234,7 @@ class PPO1(ActorCriticRLModel):
                         self.episode_reward = total_episode_reward_logger(self.episode_reward,
                                                                           seg["true_rew"].reshape((self.n_envs, -1)),
                                                                           seg["dones"].reshape((self.n_envs, -1)),
-                                                                          writer, timesteps_so_far)
+                                                                          writer, self.num_timesteps)
 
                     # predicted value function before udpate
                     vpredbefore = seg["vpred"]
@@ -244,7 +255,7 @@ class PPO1(ActorCriticRLModel):
                         # list of tuples, each of which gives the loss for a minibatch
                         losses = []
                         for i, batch in enumerate(dataset.iterate_once(optim_batchsize)):
-                            steps = (timesteps_so_far +
+                            steps = (self.num_timesteps +
                                      k * optim_batchsize +
                                      int(i * (optim_batchsize / len(dataset.data_map))))
                             if writer is not None:
@@ -297,10 +308,10 @@ class PPO1(ActorCriticRLModel):
                     logger.record_tabular("EpRewMean", np.mean(rewbuffer))
                     logger.record_tabular("EpThisIter", len(lens))
                     episodes_so_far += len(lens)
-                    timesteps_so_far += MPI.COMM_WORLD.allreduce(seg["total_timestep"])
+                    self.num_timesteps += MPI.COMM_WORLD.allreduce(seg["total_timestep"])
                     iters_so_far += 1
                     logger.record_tabular("EpisodesSoFar", episodes_so_far)
-                    logger.record_tabular("TimestepsSoFar", timesteps_so_far)
+                    logger.record_tabular("TimestepsSoFar", self.num_timesteps)
                     logger.record_tabular("TimeElapsed", time.time() - t_start)
                     if self.verbose >= 1 and MPI.COMM_WORLD.Get_rank() == 0:
                         logger.dump_tabular()

@@ -140,6 +140,7 @@ class ACER(ActorCriticRLModel):
         self.n_batch = None
         self.summary = None
         self.episode_reward = None
+        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
@@ -169,6 +170,7 @@ class ACER(ActorCriticRLModel):
                 raise ValueError("Error: ACER does not work with {} actions space.".format(self.action_space))
 
             self.n_batch = self.n_envs * self.n_steps
+            self.num_timesteps = 0
 
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -442,8 +444,18 @@ class ACER(ActorCriticRLModel):
 
         return self.names_ops, step_return[1:]  # strip off _train
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="ACER"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="ACER",
+              reset_num_timesteps=False):
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = False
+        if self.num_timesteps == 0:
+            new_tb_log = True
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             self.learning_rate_schedule = Scheduler(initial_value=self.learning_rate, n_values=total_timesteps,
@@ -472,7 +484,7 @@ class ACER(ActorCriticRLModel):
                     self.episode_reward = total_episode_reward_logger(self.episode_reward,
                                                                       rewards.reshape((self.n_envs, self.n_steps)),
                                                                       dones.reshape((self.n_envs, self.n_steps)),
-                                                                      writer, steps)
+                                                                      writer, self.num_timesteps)
 
                 # reshape stuff correctly
                 obs = obs.reshape(runner.batch_ob_shape)
@@ -483,13 +495,13 @@ class ACER(ActorCriticRLModel):
                 masks = masks.reshape([runner.batch_ob_shape[0]])
 
                 names_ops, values_ops = self._train_step(obs, actions, rewards, dones, mus, self.initial_state, masks,
-                                                         steps, writer)
+                                                         self.num_timesteps, writer)
 
                 if callback is not None:
                     callback(locals(), globals())
 
                 if self.verbose >= 1 and (int(steps / runner.n_batch) % log_interval == 0):
-                    logger.record_tabular("total_timesteps", steps)
+                    logger.record_tabular("total_timesteps", self.num_timesteps)
                     logger.record_tabular("fps", int(steps / (time.time() - t_start)))
                     # IMP: In EpisodicLife env, during training, we get done=True at each loss of life,
                     # not just at the terminal state. Thus, this is mean until end of life, not end of episode.
@@ -514,7 +526,10 @@ class ACER(ActorCriticRLModel):
                         dones = dones.reshape([runner.n_batch])
                         masks = masks.reshape([runner.batch_ob_shape[0]])
 
-                        self._train_step(obs, actions, rewards, dones, mus, self.initial_state, masks, steps)
+                        self._train_step(obs, actions, rewards, dones, mus, self.initial_state, masks,
+                                         self.num_timesteps)
+
+                self.num_timesteps += self.n_batch
 
         return self
 

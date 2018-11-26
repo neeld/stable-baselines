@@ -75,6 +75,7 @@ class A2C(ActorCriticRLModel):
         self.learning_rate_schedule = None
         self.summary = None
         self.episode_reward = None
+        self.num_timesteps = None
 
         # if we are loading, it is possible the environment is not known, however the obs and action space are known
         if _init_setup_model:
@@ -85,6 +86,8 @@ class A2C(ActorCriticRLModel):
 
             assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the A2C model must be an " \
                                                                 "instance of common.policies.ActorCriticPolicy."
+
+            self.num_timesteps = 0
 
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -201,8 +204,18 @@ class A2C(ActorCriticRLModel):
 
         return policy_loss, value_loss, policy_entropy
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="A2C"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="A2C",
+              reset_num_timesteps=False):
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = False
+        if self.num_timesteps == 0:
+            new_tb_log = True
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             self.learning_rate_schedule = Scheduler(initial_value=self.learning_rate, n_values=total_timesteps,
@@ -215,8 +228,8 @@ class A2C(ActorCriticRLModel):
             for update in range(1, total_timesteps // self.n_batch + 1):
                 # true_reward is the reward without discount
                 obs, states, rewards, masks, actions, values, true_reward = runner.run()
-                _, value_loss, policy_entropy = self._train_step(obs, states, rewards, masks, actions, values, update,
-                                                                 writer)
+                _, value_loss, policy_entropy = self._train_step(obs, states, rewards, masks, actions, values,
+                                                                 self.num_timesteps // (self.n_batch + 1), writer)
                 n_seconds = time.time() - t_start
                 fps = int((update * self.n_batch) / n_seconds)
 
@@ -224,7 +237,9 @@ class A2C(ActorCriticRLModel):
                     self.episode_reward = total_episode_reward_logger(self.episode_reward,
                                                                       true_reward.reshape((self.n_envs, self.n_steps)),
                                                                       masks.reshape((self.n_envs, self.n_steps)),
-                                                                      writer, update * (self.n_batch + 1))
+                                                                      writer, self.num_timesteps)
+
+                self.num_timesteps += self.n_batch + 1
 
                 if callback is not None:
                     callback(locals(), globals())

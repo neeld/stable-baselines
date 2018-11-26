@@ -258,6 +258,7 @@ class DDPG(OffPolicyRLModel):
         self.summary = None
         self.episode_reward = None
         self.tb_seen_steps = None
+        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
@@ -269,6 +270,8 @@ class DDPG(OffPolicyRLModel):
                 "Error: DDPG cannot output a {} action space, only spaces.Box is supported.".format(self.action_space)
             assert issubclass(self.policy, DDPGPolicy), "Error: the input policy for the DDPG model must be " \
                                                         "an instance of DDPGPolicy."
+
+            self.num_timesteps = 0
 
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -730,8 +733,18 @@ class DDPG(OffPolicyRLModel):
                 self.param_noise_stddev: self.param_noise.current_stddev,
             })
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="DDPG"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="DDPG",
+              reset_num_timesteps=False):
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = False
+        if self.num_timesteps == 0:
+            new_tb_log = True
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
 
             # a list for tensorboard logging, to prevent logging with the same step number, if it already occured
@@ -837,7 +850,7 @@ class DDPG(OffPolicyRLModel):
                             # weird equation to deal with the fact the nb_train_steps will be different
                             # to nb_rollout_steps
                             step = (int(t_train * (self.nb_rollout_steps / self.nb_train_steps)) +
-                                    total_steps - self.nb_rollout_steps)
+                                    self.num_timesteps - self.nb_rollout_steps)
 
                             critic_loss, actor_loss = self._train_step(step, writer, log=t_train == 0)
                             epoch_critic_losses.append(critic_loss)

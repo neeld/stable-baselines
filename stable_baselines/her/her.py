@@ -93,7 +93,8 @@ class HER(BaseRLModel):
             with self.graph.as_default():
                 pass
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="HER"):
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="HER",
+              reset_num_timesteps=False):
         with SetVerbosity(self.verbose):
             self._setup_learn(seed)
 

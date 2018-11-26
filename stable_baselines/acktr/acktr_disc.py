@@ -91,6 +91,7 @@ class ACKTR(ActorCriticRLModel):
         self.summary = None
         self.episode_reward = None
         self.trained = False
+        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
@@ -103,6 +104,8 @@ class ACKTR(ActorCriticRLModel):
 
             if isinstance(self.action_space, Box):
                 raise NotImplementedError("WIP: ACKTR does not support Continuous actions yet.")
+
+            self.num_timesteps = 0
 
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -235,8 +238,18 @@ class ACKTR(ActorCriticRLModel):
 
         return policy_loss, value_loss, policy_entropy
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="ACKTR"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="ACKTR",
+              reset_num_timesteps=False):
+
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = False
+        if self.num_timesteps == 0:
+            new_tb_log = True
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
             self._setup_learn(seed)
             self.n_batch = self.n_envs * self.n_steps
 
@@ -281,7 +294,8 @@ class ACKTR(ActorCriticRLModel):
                 # true_reward is the reward without discount
                 obs, states, rewards, masks, actions, values, true_reward = runner.run()
                 policy_loss, value_loss, policy_entropy = self._train_step(obs, states, rewards, masks, actions, values,
-                                                                           update, writer)
+                                                                           self.num_timesteps // (self.n_batch + 1),
+                                                                           writer)
                 n_seconds = time.time() - t_start
                 fps = int((update * self.n_batch) / n_seconds)
 
@@ -289,7 +303,7 @@ class ACKTR(ActorCriticRLModel):
                     self.episode_reward = total_episode_reward_logger(self.episode_reward,
                                                                       true_reward.reshape((self.n_envs, self.n_steps)),
                                                                       masks.reshape((self.n_envs, self.n_steps)),
-                                                                      writer, update * (self.n_batch + 1))
+                                                                      writer, self.num_timesteps)
 
                 if callback is not None:
                     callback(locals(), globals())
@@ -297,13 +311,15 @@ class ACKTR(ActorCriticRLModel):
                 if self.verbose >= 1 and (update % log_interval == 0 or update == 1):
                     explained_var = explained_variance(values, rewards)
                     logger.record_tabular("nupdates", update)
-                    logger.record_tabular("total_timesteps", update * self.n_batch)
+                    logger.record_tabular("total_timesteps", self.num_timesteps)
                     logger.record_tabular("fps", fps)
                     logger.record_tabular("policy_entropy", float(policy_entropy))
                     logger.record_tabular("policy_loss", float(policy_loss))
                     logger.record_tabular("value_loss", float(value_loss))
                     logger.record_tabular("explained_variance", float(explained_var))
                     logger.dump_tabular()
+
+                self.num_timesteps += self.n_batch + 1
 
             coord.request_stop()
             coord.join(enqueue_threads)
