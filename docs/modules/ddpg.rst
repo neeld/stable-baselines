@@ -35,7 +35,7 @@ Notes
 Can I use?
 ----------
 
--  Reccurent policies: ❌
+-  Recurrent policies: ❌
 -  Multi processing: ❌
 -  Gym spaces:
 
@@ -151,7 +151,8 @@ You can easily define a custom architecture for the policy network:
   class CustomPolicy(FeedForwardPolicy):
       def __init__(self, *args, **kwargs):
           super(CustomPolicy, self).__init__(*args, **kwargs,
-                                             layers=[128, 128, 128],
+                                             net_arch=[dict(pi=[128, 128, 128],
+                                                            vf=[128, 128, 128])],
                                              layer_norm=False,
                                              feature_extraction="mlp")
 

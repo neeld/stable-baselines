@@ -36,14 +36,15 @@ class PPO2(ActorCriticRLModel):
     :param verbose: (int) the verbosity level: 0 none, 1 training information, 2 tensorflow debug
     :param tensorboard_log: (str) the log location for tensorboard (if None, no logging)
     :param _init_setup_model: (bool) Whether or not to build the network at the creation of the instance
+    :param policy_kwargs: (dict) additional arguments to be passed to the policy on creation
     """
 
     def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
                  max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, verbose=0,
-                 tensorboard_log=None, _init_setup_model=True):
+                 tensorboard_log=None, _init_setup_model=True, policy_kwargs=None):
 
         super(PPO2, self).__init__(policy=policy, env=env, verbose=verbose, requires_vec_env=True,
-                                   _init_setup_model=_init_setup_model)
+                                   _init_setup_model=_init_setup_model, policy_kwargs=policy_kwargs)
 
         self.learning_rate = learning_rate
         self.cliprange = cliprange
@@ -114,12 +115,12 @@ class PPO2(ActorCriticRLModel):
                     n_batch_train = self.n_batch // self.nminibatches
 
                 act_model = self.policy(self.sess, self.observation_space, self.action_space, self.n_envs, 1,
-                                        n_batch_step, reuse=False)
+                                        n_batch_step, reuse=False, **self.policy_kwargs)
                 with tf.variable_scope("train_model", reuse=True,
                                        custom_getter=tf_util.outer_scope_getter("train_model")):
                     train_model = self.policy(self.sess, self.observation_space, self.action_space,
                                               self.n_envs // self.nminibatches, self.n_steps, n_batch_train,
-                                              reuse=True)
+                                              reuse=True, **self.policy_kwargs)
 
                 with tf.variable_scope("loss", reuse=False):
                     self.action_ph = train_model.pdtype.sample_placeholder([None], name="action_ph")
@@ -157,6 +158,8 @@ class PPO2(ActorCriticRLModel):
 
                     with tf.variable_scope('model'):
                         self.params = tf.trainable_variables()
+                        for var in self.params:
+                            tf.summary.histogram(var.name, var)
                     grads = tf.gradients(loss, self.params)
                     if self.max_grad_norm is not None:
                         grads, _grad_norm = tf.clip_by_global_norm(grads, self.max_grad_norm)
@@ -326,9 +329,6 @@ class PPO2(ActorCriticRLModel):
                                                                       masks.reshape((self.n_envs, self.n_steps)),
                                                                       writer, self.num_timesteps)
 
-                if callback is not None:
-                    callback(locals(), globals())
-
                 if self.verbose >= 1 and (update % log_interval == 0 or update == 1):
                     explained_var = explained_variance(values, returns)
                     logger.logkv("serial_timesteps", update * self.n_steps)
@@ -342,6 +342,12 @@ class PPO2(ActorCriticRLModel):
                     for (loss_val, loss_name) in zip(loss_vals, self.loss_names):
                         logger.logkv(loss_name, loss_val)
                     logger.dumpkvs()
+
+                if callback is not None:
+                    # Only stop training if return value is False, not when it is None. This is for backwards
+                    # compatibility with callbacks that have no return statement.
+                    if callback(locals(), globals()) == False:
+                        break
 
             return self
 
@@ -362,7 +368,8 @@ class PPO2(ActorCriticRLModel):
             "observation_space": self.observation_space,
             "action_space": self.action_space,
             "n_envs": self.n_envs,
-            "_vectorize_action": self._vectorize_action
+            "_vectorize_action": self._vectorize_action,
+            "policy_kwargs": self.policy_kwargs
         }
 
         params = self.sess.run(self.params)
@@ -443,8 +450,8 @@ class Runner(AbstractEnvRunner):
             mb_advs[step] = last_gae_lam = delta + self.gamma * self.lam * nextnonterminal * last_gae_lam
         mb_returns = mb_advs + mb_values
 
-        mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs = \
-            map(swap_and_flatten, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs))
+        mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, true_reward = \
+            map(swap_and_flatten, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, true_reward))
 
         return mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs, mb_states, ep_infos, true_reward
 
@@ -496,7 +503,7 @@ def constfn(val):
 def safe_mean(arr):
     """
     Compute the mean of an array if there is at least one element.
-    For empty array, return zero. It is used for logging only.
+    For empty array, return nan. It is used for logging only.
 
     :param arr: (np.ndarray)
     :return: (float)
