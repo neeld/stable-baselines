@@ -90,13 +90,11 @@ class DQN(OffPolicyRLModel):
         self.params = None
         self.summary = None
         self.episode_reward = None
-        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
 
     def setup_model(self):
-        self.num_timesteps = 0
 
         with SetVerbosity(self.verbose):
             assert not isinstance(self.action_space, gym.spaces.Box), \
@@ -137,14 +135,9 @@ class DQN(OffPolicyRLModel):
                 self.summary = tf.summary.merge_all()
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="DQN",
-              reset_num_timesteps=False):
+              reset_num_timesteps=True):
 
-        if reset_num_timesteps:
-            self.num_timesteps = 0
-
-        new_tb_log = False
-        if self.num_timesteps == 0:
-            new_tb_log = True
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -177,7 +170,7 @@ class DQN(OffPolicyRLModel):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
                     # compatibility with callbacks that have no return statement.
-                    if callback(locals(), globals()) == False:
+                    if callback(locals(), globals()) is False:
                         break
                 # Take action and update exploration to the newest value
                 kwargs = {}

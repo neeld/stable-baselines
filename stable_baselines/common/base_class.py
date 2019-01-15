@@ -39,6 +39,7 @@ class BaseRLModel(ABC):
         self.action_space = None
         self.n_envs = None
         self._vectorize_action = False
+        self.num_timesteps = 0
 
         if env is not None:
             if isinstance(env, str):
@@ -115,6 +116,21 @@ class BaseRLModel(ABC):
 
         self.env = env
 
+    def _init_num_timesteps(self, reset_num_timesteps=True):
+        """
+        Initialize and resets num_timesteps (total timesteps since beginning of training)
+        if needed. Mainly used logging and plotting (tensorboard).
+
+        :param reset_num_timesteps: (bool) Set it to false when continuing training
+            to not create new plotting curves in tensorboard.
+        :return: (bool) Whether a new tensorboard log needs to be created
+        """
+        if reset_num_timesteps:
+            self.num_timesteps = 0
+
+        new_tb_log = self.num_timesteps == 0
+        return new_tb_log
+
     @abstractmethod
     def setup_model(self):
         """
@@ -136,7 +152,7 @@ class BaseRLModel(ABC):
 
     @abstractmethod
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run",
-              reset_num_timesteps=False):
+              reset_num_timesteps=True):
         """
         Return a trained model.
 
@@ -335,7 +351,8 @@ class ActorCriticRLModel(BaseRLModel):
         pass
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def learn(self, total_timesteps, callback=None, seed=None,
+              log_interval=100, tb_log_name="run", reset_num_timesteps=True):
         pass
 
     def predict(self, observation, state=None, mask=None, deterministic=False):
@@ -470,7 +487,8 @@ class OffPolicyRLModel(BaseRLModel):
         pass
 
     @abstractmethod
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="run"):
+    def learn(self, total_timesteps, callback=None, seed=None,
+              log_interval=100, tb_log_name="run", reset_num_timesteps=True):
         pass
 
     @abstractmethod

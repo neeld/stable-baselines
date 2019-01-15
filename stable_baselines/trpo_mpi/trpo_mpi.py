@@ -15,6 +15,8 @@ from stable_baselines.common.cg import conjugate_gradient
 from stable_baselines.common.policies import ActorCriticPolicy
 from stable_baselines.a2c.utils import find_trainable_variables, total_episode_reward_logger
 from stable_baselines.trpo_mpi.utils import traj_segment_generator, add_vtarg_and_adv, flatten_lists
+
+
 # from stable_baselines.gail.statistics import Stats
 
 
@@ -92,7 +94,6 @@ class TRPO(ActorCriticRLModel):
         self.params = None
         self.summary = None
         self.episode_reward = None
-        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
@@ -100,8 +101,6 @@ class TRPO(ActorCriticRLModel):
     def setup_model(self):
         # prevent import loops
         from stable_baselines.gail.adversary import TransitionClassifier
-
-        self.num_timesteps = 0
 
         with SetVerbosity(self.verbose):
 
@@ -184,7 +183,7 @@ class TRPO(ActorCriticRLModel):
                     self.assign_old_eq_new = \
                         tf_util.function([], [], updates=[tf.assign(oldv, newv) for (oldv, newv) in
                                                           zipsame(tf_util.get_globals_vars("oldpi"),
-                                                          tf_util.get_globals_vars("model"))])
+                                                                  tf_util.get_globals_vars("model"))])
                     self.compute_losses = tf_util.function([observation, old_policy.obs_ph, action, atarg], losses)
                     self.compute_fvp = tf_util.function([flat_tangent, observation, old_policy.obs_ph, action, atarg],
                                                         fvp)
@@ -253,14 +252,9 @@ class TRPO(ActorCriticRLModel):
                                      [self.summary, tf_util.flatgrad(optimgain, var_list)] + losses)
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="TRPO",
-              reset_num_timesteps=False):
+              reset_num_timesteps=True):
 
-        if reset_num_timesteps:
-            self.num_timesteps = 0
-
-        new_tb_log = False
-        if self.num_timesteps == 0:
-            new_tb_log = True
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -272,6 +266,7 @@ class TRPO(ActorCriticRLModel):
 
                 episodes_so_far = 0
                 iters_so_far = 0
+                timesteps_so_far = 0
                 t_start = time.time()
                 lenbuffer = deque(maxlen=40)  # rolling buffer for episode lengths
                 rewbuffer = deque(maxlen=40)  # rolling buffer for episode rewards
@@ -303,6 +298,7 @@ class TRPO(ActorCriticRLModel):
 
                     def fisher_vector_product(vec):
                         return self.allmean(self.compute_fvp(vec, *fvpargs, sess=self.sess)) + self.cg_damping * vec
+
                     # ------------------ Update G ------------------
                     logger.log("Optimizing Policy...")
                     # g_step = 1 when not using GAIL
@@ -443,7 +439,9 @@ class TRPO(ActorCriticRLModel):
                         logger.record_tabular("EpTrueRewMean", np.mean(true_rewbuffer))
                     logger.record_tabular("EpThisIter", len(lens))
                     episodes_so_far += len(lens)
-                    self.num_timesteps += seg["total_timestep"]
+                    total_timesteps = MPI.COMM_WORLD.allreduce(seg["total_timestep"])
+                    timesteps_so_far += total_timesteps
+                    self.num_timesteps += total_timesteps
                     iters_so_far += 1
 
                     logger.record_tabular("EpisodesSoFar", episodes_so_far)

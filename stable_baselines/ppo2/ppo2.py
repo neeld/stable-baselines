@@ -84,7 +84,6 @@ class PPO2(ActorCriticRLModel):
         self.n_batch = None
         self.summary = None
         self.episode_reward = None
-        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
@@ -96,7 +95,6 @@ class PPO2(ActorCriticRLModel):
                                                                "an instance of common.policies.ActorCriticPolicy."
 
             self.n_batch = self.n_envs * self.n_steps
-            self.num_timesteps = 0
 
             n_cpu = multiprocessing.cpu_count()
             if sys.platform == 'darwin':
@@ -251,17 +249,12 @@ class PPO2(ActorCriticRLModel):
         return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=1, tb_log_name="PPO2",
-              reset_num_timesteps=False):
+              reset_num_timesteps=True):
         # Transform to callable if needed
         self.learning_rate = get_schedule_fn(self.learning_rate)
         self.cliprange = get_schedule_fn(self.cliprange)
 
-        if reset_num_timesteps:
-            self.num_timesteps = 0
-
-        new_tb_log = False
-        if self.num_timesteps == 0:
-            new_tb_log = True
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -346,7 +339,7 @@ class PPO2(ActorCriticRLModel):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
                     # compatibility with callbacks that have no return statement.
-                    if callback(locals(), globals()) == False:
+                    if callback(locals(), globals()) is False:
                         break
 
             return self

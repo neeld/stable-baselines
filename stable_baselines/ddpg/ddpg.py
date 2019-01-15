@@ -260,7 +260,7 @@ class DDPG(OffPolicyRLModel):
         self.summary = None
         self.episode_reward = None
         self.tb_seen_steps = None
-        self.num_timesteps = None
+
         self.target_params = None
 
         if _init_setup_model:
@@ -273,8 +273,6 @@ class DDPG(OffPolicyRLModel):
                 "Error: DDPG cannot output a {} action space, only spaces.Box is supported.".format(self.action_space)
             assert issubclass(self.policy, DDPGPolicy), "Error: the input policy for the DDPG model must be " \
                                                         "an instance of DDPGPolicy."
-
-            self.num_timesteps = 0
 
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -741,14 +739,9 @@ class DDPG(OffPolicyRLModel):
             })
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="DDPG",
-              reset_num_timesteps=False):
+              reset_num_timesteps=True):
 
-        if reset_num_timesteps:
-            self.num_timesteps = 0
-
-        new_tb_log = False
-        if self.num_timesteps == 0:
-            new_tb_log = True
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -827,9 +820,9 @@ class DDPG(OffPolicyRLModel):
                             self._store_transition(obs, action, reward, new_obs, done)
                             obs = new_obs
                             if callback is not None:
-                                # Only stop training if return value is False, not when it is None. This is for backwards
-                                # compatibility with callbacks that have no return statement.
-                                if callback(locals(), globals()) == False:
+                                # Only stop training if return value is False, not when it is None.
+                                # This is for backwards compatibility with callbacks that have no return statement.
+                                if callback(locals(), globals()) is False:
                                     return self
 
                             if done:

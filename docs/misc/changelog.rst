@@ -19,6 +19,7 @@ Pre-Release 2.4.0a (WIP)
 - added more flexible custom LSTM policies
 - added auto entropy coefficient optimization for SAC
 - clip continuous actions at test time too for all algorithms (except SAC/DDPG where it is not needed)
+- added ``reset_num_timesteps`` keyword when calling train() to continue tensorboard learning curves
 
 
 Release 2.3.0 (2018-12-05)

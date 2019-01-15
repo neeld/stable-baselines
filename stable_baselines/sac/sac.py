@@ -341,8 +341,14 @@ class SAC(OffPolicyRLModel):
 
         return policy_loss, qf1_loss, qf2_loss, value_loss, entropy
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=4, tb_log_name="SAC"):
-        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
+    def learn(self, total_timesteps, callback=None, seed=None,
+              log_interval=4, tb_log_name="SAC", reset_num_timesteps=True):
+
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
+
+        with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
+                as writer:
+
             self._setup_learn(seed)
 
             # Transform to callable if needed
@@ -368,7 +374,7 @@ class SAC(OffPolicyRLModel):
                 # Before training starts, randomly sample actions
                 # from a uniform distribution for better exploration.
                 # Afterwards, use the learned policy.
-                if step < self.learning_starts:
+                if self.num_timesteps < self.learning_starts:
                     action = self.env.action_space.sample()
                     # No need to rescale when sampling random action
                     rescaled_action = action
@@ -395,13 +401,13 @@ class SAC(OffPolicyRLModel):
                     ep_reward = np.array([reward]).reshape((1, -1))
                     ep_done = np.array([done]).reshape((1, -1))
                     self.episode_reward = total_episode_reward_logger(self.episode_reward, ep_reward,
-                                                                      ep_done, writer, step)
+                                                                      ep_done, writer, self.num_timesteps)
 
                 if step % self.train_freq == 0:
                     mb_infos_vals = []
                     # Update policy, critics and target networks
                     for grad_step in range(self.gradient_steps):
-                        if step < self.batch_size or step < self.learning_starts:
+                        if self.num_timesteps < self.batch_size or self.num_timesteps < self.learning_starts:
                             break
                         n_updates += 1
                         # Compute current learning_rate
@@ -429,6 +435,7 @@ class SAC(OffPolicyRLModel):
                     mean_reward = round(float(np.mean(episode_rewards[-101:-1])), 1)
 
                 num_episodes = len(episode_rewards)
+                self.num_timesteps += 1
                 # Display training infos
                 if self.verbose >= 1 and done and log_interval is not None and len(episode_rewards) % log_interval == 0:
                     fps = int(step / (time.time() - start_time))
@@ -443,7 +450,7 @@ class SAC(OffPolicyRLModel):
                     if len(infos_values) > 0:
                         for (name, val) in zip(self.infos_names, infos_values):
                             logger.logkv(name, val)
-                    logger.logkv("total timesteps", step)
+                    logger.logkv("total timesteps", self.num_timesteps)
                     logger.dumpkvs()
                     # Reset infos:
                     infos_values = []

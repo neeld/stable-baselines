@@ -92,7 +92,6 @@ class ACKTR(ActorCriticRLModel):
         self.summary = None
         self.episode_reward = None
         self.trained = False
-        self.num_timesteps = None
 
         if _init_setup_model:
             self.setup_model()
@@ -105,8 +104,6 @@ class ACKTR(ActorCriticRLModel):
 
             if isinstance(self.action_space, Box):
                 raise NotImplementedError("WIP: ACKTR does not support Continuous actions yet.")
-
-            self.num_timesteps = 0
 
             self.graph = tf.Graph()
             with self.graph.as_default():
@@ -240,14 +237,9 @@ class ACKTR(ActorCriticRLModel):
         return policy_loss, value_loss, policy_entropy
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="ACKTR",
-              reset_num_timesteps=False):
+              reset_num_timesteps=True):
 
-        if reset_num_timesteps:
-            self.num_timesteps = 0
-
-        new_tb_log = False
-        if self.num_timesteps == 0:
-            new_tb_log = True
+        new_tb_log = self._init_num_timesteps(reset_num_timesteps)
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -309,7 +301,7 @@ class ACKTR(ActorCriticRLModel):
                 if callback is not None:
                     # Only stop training if return value is False, not when it is None. This is for backwards
                     # compatibility with callbacks that have no return statement.
-                    if callback(locals(), globals()) == False:
+                    if callback(locals(), globals()) is False:
                         break
 
                 if self.verbose >= 1 and (update % log_interval == 0 or update == 1):

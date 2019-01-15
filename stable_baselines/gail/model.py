@@ -67,15 +67,15 @@ class GAIL(ActorCriticRLModel):
         self.trpo.setup_model()
 
     def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="GAIL",
-              reset_num_timesteps=False):
+              reset_num_timesteps=True):
         self.trpo.learn(total_timesteps, callback, seed, log_interval, tb_log_name, reset_num_timesteps)
         return self
 
     def predict(self, observation, state=None, mask=None, deterministic=False):
         return self.trpo.predict(observation, state, mask, deterministic=deterministic)
 
-    def action_probability(self, observation, state=None, mask=None):
-        return self.trpo.action_probability(observation, state, mask)
+    def action_probability(self, observation, state=None, mask=None, actions=None):
+        return self.trpo.action_probability(observation, state, mask, actions)
 
     def save(self, save_path):
         self.trpo.save(save_path)
