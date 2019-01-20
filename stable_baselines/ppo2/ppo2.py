@@ -262,6 +262,8 @@ class PPO2(ActorCriticRLModel):
             ep_info_buf = deque(maxlen=100)
             t_first_start = time.time()
 
+            # import pdb; pdb.set_trace()
+
             nupdates = total_timesteps // self.n_batch
             for update in range(1, nupdates + 1):
                 assert self.n_batch % self.nminibatches == 0
@@ -284,7 +286,13 @@ class PPO2(ActorCriticRLModel):
                             end = start + batch_size
                             mbinds = inds[start:end]
                             slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
-                            mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, writer=writer,
+
+                            if update % log_interval == 0:
+                                mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, writer=writer,
+                                                                 update=timestep))
+                                print ("updating", str(update))
+                            else:
+                                mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, writer=None,
                                                                  update=timestep))
                 else:  # recurrent version
                     assert self.n_envs % self.nminibatches == 0
@@ -301,8 +309,12 @@ class PPO2(ActorCriticRLModel):
                             mb_flat_inds = flat_indices[mb_env_inds].ravel()
                             slices = (arr[mb_flat_inds] for arr in (obs, returns, masks, actions, values, neglogpacs))
                             mb_states = states[mb_env_inds]
-                            mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, update=timestep,
-                                                                 writer=writer, states=mb_states))
+                            if update % log_interval == 0:
+                                mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, update=timestep,
+                                                                     writer=writer, states=mb_states))
+                            else:
+                                mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, update=timestep,
+                                                                     writer=None, states=mb_states))
 
                 loss_vals = np.mean(mb_loss_vals, axis=0)
                 t_now = time.time()
