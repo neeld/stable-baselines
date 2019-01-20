@@ -290,7 +290,6 @@ class PPO2(ActorCriticRLModel):
                             if update % log_interval == 0:
                                 mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, writer=writer,
                                                                  update=timestep))
-                                print ("updating", str(update))
                             else:
                                 mb_loss_vals.append(self._train_step(lr_now, cliprangenow, *slices, writer=None,
                                                                  update=timestep))
